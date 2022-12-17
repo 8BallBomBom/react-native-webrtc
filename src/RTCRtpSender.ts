@@ -1,17 +1,19 @@
 import { NativeModules } from 'react-native';
 
 import MediaStreamTrack from './MediaStreamTrack';
+import RTCDTMFSender from './RTCDTMFSender';
 import RTCRtpCapabilities, { senderCapabilities, DEFAULT_AUDIO_CAPABILITIES } from './RTCRtpCapabilities';
 import RTCRtpSendParameters, { RTCRtpSendParametersInit } from './RTCRtpSendParameters';
 
 const { WebRTCModule } = NativeModules;
-
 
 export default class RTCRtpSender {
     _id: string;
     _track: MediaStreamTrack | null = null;
     _peerConnectionId: number;
     _rtpParameters: RTCRtpSendParameters;
+
+    dtmf?: RTCDTMFSender;
 
     constructor(info: {
         peerConnectionId: number,
@@ -25,6 +27,13 @@ export default class RTCRtpSender {
 
         if (info.track) {
             this._track = info.track;
+
+            if (info.track.kind === 'audio') {
+                this.dtmf = new RTCDTMFSender({
+                    peerConnectionId: info.peerConnectionId,
+                    id: info.id
+                });
+            }
         }
     }
 
