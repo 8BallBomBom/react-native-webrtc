@@ -173,12 +173,21 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
             iceServersArray = map.getArray("iceServers");
         }
         List<PeerConnection.IceServer> iceServers = createIceServers(iceServersArray);
+
         PeerConnection.RTCConfiguration conf = new PeerConnection.RTCConfiguration(iceServers);
+        conf.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
 
         // Required for perfect negotiation.
         conf.enableImplicitRollback = true;
 
-        conf.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
+        // Enable GCM ciphers.
+        CryptoOptions cryptoOptions = CryptoOptions.builder()
+                                              .setEnableGcmCryptoSuites(true)
+                                              .setEnableAes128Sha1_32CryptoCipher(false)
+                                              .setEnableEncryptedRtpHeaderExtensions(false)
+                                              .setRequireFrameEncryption(false)
+                                              .createCryptoOptions();
+        conf.cryptoOptions = cryptoOptions;
 
         if (map == null) {
             return conf;
@@ -836,13 +845,16 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
         WritableArray transceiverUpdates = Arguments.createArray();
 
         for (RtpTransceiver transceiver : peerConnection.getTransceivers()) {
-            RtpTransceiver.RtpTransceiverDirection direction = transceiver.getCurrentDirection();
-            if (direction == null) continue;
-            String directionSerialized = SerializeUtils.serializeDirection(direction);
             WritableMap transceiverUpdate = Arguments.createMap();
+
+            RtpTransceiver.RtpTransceiverDirection direction = transceiver.getCurrentDirection();
+            if (direction != null) {
+                String directionSerialized = SerializeUtils.serializeDirection(direction);
+                transceiverUpdate.putString("currentDirection", directionSerialized);
+            }
+
             transceiverUpdate.putString("transceiverId", transceiver.getSender().id());
             transceiverUpdate.putString("mid", transceiver.getMid());
-            transceiverUpdate.putString("currentDirection", directionSerialized);
             transceiverUpdate.putBoolean("isStopped", transceiver.isStopped());
             transceiverUpdate.putMap("senderRtpParameters",
                     SerializeUtils.serializeRtpParameters(transceiver.getSender().getParameters()));
@@ -873,12 +885,18 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void peerConnectionCreateOffer(int id, ReadableMap options, Promise promise) {
         ThreadUtils.runOnExecutor(() -> {
-            PeerConnection peerConnection = getPeerConnection(id);
+            PeerConnectionObserver pco = mPeerConnectionObservers.get(id);
+            PeerConnection peerConnection = pco.getPeerConnection();
 
             if (peerConnection == null) {
                 Log.d(TAG, "peerConnectionCreateOffer() peerConnection is null");
                 promise.reject(new Exception("PeerConnection not found"));
                 return;
+            }
+
+            List<String> receiversIds = new ArrayList<>();
+            for (RtpTransceiver transceiver : peerConnection.getTransceivers()) {
+                receiversIds.add(transceiver.getReceiver().id());
             }
 
             final SdpObserver observer = new SdpObserver() {
@@ -898,6 +916,19 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
 
                         params.putArray("transceiversInfo", getTransceiversInfo(peerConnection));
                         params.putMap("sdpInfo", sdpInfo);
+
+                        WritableArray newTransceivers = Arguments.createArray();
+                        for (RtpTransceiver transceiver : peerConnection.getTransceivers()) {
+                            if (!receiversIds.contains(transceiver.getReceiver().id())) {
+                                WritableMap newTransceiver = Arguments.createMap();
+                                newTransceiver.putInt("transceiverOrder", pco.getNextTransceiverId());
+                                newTransceiver.putMap(
+                                        "transceiver", SerializeUtils.serializeTransceiver(id, transceiver));
+                                newTransceivers.pushMap(newTransceiver);
+                            }
+                        }
+
+                        params.putArray("newTransceivers", newTransceivers);
 
                         promise.resolve(params);
                     });
